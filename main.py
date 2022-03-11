@@ -1,7 +1,7 @@
 #Import libraries
 import numpy as np
 import math
-from mip import Model, xsum, minimize, BINARY
+from mip import Model, xsum, minimize, BINARY, INTEGER
 import pandas as pd
 from itertools import product
 
@@ -18,7 +18,7 @@ data = {
 }
 
 #coordinates of the depots
-coordinates = {
+depots = {
   "x": [25,1], #x coordinates
   "y": [5,50]  #y coordinates
 }
@@ -26,12 +26,8 @@ coordinates = {
 #create the dataframes
 df_data = pd.DataFrame(data, index=["ModelA","ModelB","ModelC"])
 df_data = df_data.T
-df_coordinates = pd.DataFrame(coordinates, index=["Depot1","Depot2"])
-df_coordinates = df_coordinates.T
-
-#print the dataframes
-print(df_data)
-print(df_coordinates)
+df_depots = pd.DataFrame(depots, index=["Depot1","Depot2"])
+df_depots = df_depots.T
 
 #read a scenario according to the given file
 def readScenario(FileName):
@@ -39,14 +35,14 @@ def readScenario(FileName):
   global numCustomers
   global numDepots
   global customerLocation
-  global customerProducts
+  global customerDemand
   
   with open(FileName, 'r') as Scenario:
       lines = Scenario.readlines()
       numCustomers = int(lines[0]) #import the amount of customers
       numDepots = int(lines[1]) #import the amount of depots
       customerLocation = np.zeros((numCustomers, 2), dtype='f') #import the customers locations
-      customerProducts = np.zeros((numCustomers, 1), dtype='f') #import the demand per customer
+      customerDemand = np.zeros((numCustomers, 1), dtype='f') #import the demand per customer
       #split the values and make them float for each customer 
       for customers in range(2, numCustomers + 2):
         curLine = str(lines[customers])
@@ -55,7 +51,7 @@ def readScenario(FileName):
         customerLocation[customers-2][1] = float(x[1]) #float the values
       #link the demand to the customer in sequence  
       for reqProducts in range(numCustomers + 2, numCustomers*2 + 2):
-          customerProducts[reqProducts- (numCustomers + 2)] = float(lines[reqProducts])
+          customerDemand[reqProducts- (numCustomers + 2)] = float(lines[reqProducts])
 
 #Formula for euclidean Distance
 def euclideanDistance(customer1,customer2):
@@ -74,7 +70,6 @@ def createDistanceMatrix():
       else:
         DistanceMatrix[i][j] = euclideanDistance(customerLocation[i], customerLocation[j]) #Calculate distance between customer 1 and 2
         DistanceMatrix[j][i] = DistanceMatrix[i][j] #distance the otherway is the same
-  return DistanceMatrix
 
 def main():
   #read scenario file
@@ -83,19 +78,34 @@ def main():
   createDistanceMatrix()
   #Instantiate model
   model = Model()
+  TruckCapacity = []
+  
+  for k in range(0,8):
+      if k<3: 
+          i = 0
+      elif k < 6: 
+          i = 1
+      else:
+          i = 2
+      TruckCapacity.append(df_data.iloc[2][i])
+      
+          
+      
 
   # number of nodes and list of vertices
-  n, V = (numCustomers), set(range(len(DistanceMatrix)))
-  
-  # binary variables indicating if arc (i,j) is used on the route or not
-  x = [[model.add_var(var_type=BINARY) for j in V] for i in V]
-  #Binary variable indicating which model bus is used
-  bt = [[model.add_var(var_type=BINARY)] for i in range(df_data.shape[1])]
+  n, V, Vd = (numCustomers), set(range(len(DistanceMatrix))), set(range(len(df_depots)))
+  # binary variables indicating if arc (i,j) is used on the route for vehicle K
+  x = [[[model.add_var(var_type=BINARY) for k in range(0,8)] for j in V] for i in V] 
+  print(len(x))
+  print(len(x[0]))
+  print(len(x[0][0]))
+  #Binary variable indicating which is a certain bus is used
+  bt = [model.add_var(var_type=BINARY) for k in range(0,8)]
   # continuous variable to prevent subtours: each city will have a different sequential id in the planned route except the first one
   y = [model.add_var() for i in V]
-
+  
   #objective
-  #model.objective = minimize(xsum(costArray[i][j]*x[i][j] for i in V for j in V))
+  model.objective = minimize(xsum(x[i][j][k]*DistanceMatrix[i][j] for k in range(0,8) for i in V for j in V ))
 
   #constraints
   #leave each city only once
@@ -104,17 +114,21 @@ def main():
   #enter each city only once
   for i in V:
     model += xsum(x[j][i] for j in V-{i}) == 1 
-  #subtour elimination, start and stop at depot
-  for(i,j) in product(V-{0}, V-{0}):
+  #subtour elimination
+  for(i,j) in product(V, V):
     if i!=j : 
       model += y[i] - (n+1)*x[i][j] >= y[j]-n
-  #Constraint packages is not more than capacty of model type
-  for i in in     
+  #items taken on subtour cannot exceed the trucks capacity
+  for k in range(0,8):  
+      for(i,j) in product(V, V):
+          model += xsum(x[i][j][k]*customerDemand[j]*bt[k]) <= TruckCapacity[k]
+  #no more than 1 truck can be used per truck
+  for k in range(0,8):
+    model += bt[k] <= 1
     
-   
-      #Optimize model
+  #Optimize model
   model.optimize()
 
   #checking if a solution
-                     
+                
 main()
